@@ -103,6 +103,24 @@ export default class NpmResolver extends RegistryResolver {
     }
   }
 
+  async resolveRequestVersions(): Promise<any> {
+    if (this.config.offline) {
+      const res = await this.resolveRequestOffline();
+      if (res != null) {
+        return res;
+      }
+    }
+
+    const escapedName = NpmRegistry.escapeName(this.name);
+    const body = await this.config.registries.npm.request(escapedName);
+
+    if (body) {
+      return body.versions;
+    } else {
+      return null;
+    }
+  }
+
   async resolveRequestOffline(): Promise<?Manifest> {
     const packageDirs = await this.config.getCache('cachedPackages', (): Promise<Array<string>> => {
       return getCachedPackagesDirs(this.config, this.config.cacheFolder);

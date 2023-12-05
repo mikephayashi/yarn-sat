@@ -811,7 +811,9 @@ export class Install {
       return patterns;
     }
 
-    const flattenedPatterns = [];
+    let flattenedPatterns = [];
+    const resolutionNames = [];
+    let needsResolution = false;
 
     for (const name of this.resolver.getAllDependencyNamesByLevelOrder(patterns)) {
       const infos = this.resolver.getAllInfoForPackageName(name).filter((manifest: Manifest): boolean => {
@@ -831,16 +833,16 @@ export class Install {
         continue;
       }
 
-      const options = infos.map((info): ReporterSelectOption => {
-        const ref = info._reference;
-        invariant(ref, 'expected reference');
-        return {
-          // TODO `and is required by {PARENT}`,
-          name: this.reporter.lang('manualVersionResolutionOption', ref.patterns.join(', '), info.version),
+      // const options = infos.map((info): ReporterSelectOption => {
+      //   const ref = info._reference;
+      //   invariant(ref, 'expected reference');
+      //   return {
+      //     // TODO `and is required by {PARENT}`,
+      //     name: this.reporter.lang('manualVersionResolutionOption', ref.patterns.join(', '), info.version),
 
-          value: info.version,
-        };
-      });
+      //     value: info.version,
+      //   };
+      // });
       const versions = infos.map((info): string => info.version);
       let version: ?string;
 
@@ -849,15 +851,32 @@ export class Install {
         // use json `resolution` version
         version = resolutionVersion;
       } else {
-        version = await this.reporter.select(
-          this.reporter.lang('manualVersionResolution', name),
-          this.reporter.lang('answer'),
-          options,
-        );
-        this.resolutions[name] = version;
+        resolutionNames.push(name);
+        needsResolution = true;
+        continue;
+        // version = await this.reporter.select(
+        //   this.reporter.lang('manualVersionResolution', name),
+        //   this.reporter.lang('answer'),
+        //   options,
+        // );
+        // this.resolutions[name] = version;
       }
 
       flattenedPatterns.push(this.resolver.collapseAllVersionsOfPackage(name, version));
+    }
+
+    if (needsResolution) {
+      const resolvedPatterns = await this.resolver.satSolve(patterns);
+      for (const name of resolutionNames) {
+        for (const entry of resolvedPatterns) {
+          const splitEntry = entry.split('@');
+          if (name == '@' + splitEntry[1]) {
+            this.resolutions[name] = splitEntry[2];
+            break;
+          }
+        }
+      }
+      flattenedPatterns = resolvedPatterns;
     }
 
     // save resolutions to their appropriate root manifest

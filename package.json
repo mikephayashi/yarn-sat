@@ -30,6 +30,7 @@
     "is-webpack-bundle": "^1.0.0",
     "js-yaml": "^3.13.1",
     "leven": "^2.0.0",
+    "logic-solver": "^2.0.1",
     "loud-rejection": "^1.2.0",
     "micromatch": "^2.3.11",
     "mkdirp": "^0.5.1",

@@ -91,6 +91,41 @@ export default class PackageRequest {
     }
   }
 
+  async getAllVersionsOnRegistry(g): Promise<any> {
+    const {range, name} = await this.normalize(this.pattern);
+
+    const exoticResolver = getExoticResolver(range);
+    if (exoticResolver) {
+      let data = await this.findExoticVersionInfo(exoticResolver, range);
+
+      // clone data as we're manipulating it in place and this could be resolved multiple
+      // times
+      data = Object.assign({}, data);
+
+      // this is so the returned package response uses the overridden name. ie. if the
+      // package's actual name is `bar`, but it's been specified in the manifest like:
+      //   "foo": "http://foo.com/bar.tar.gz"
+      // then we use the foo name
+      data.name = name;
+      return data;
+    }
+
+    const Resolver = this.getRegistryResolver();
+    const resolver = new Resolver(this, name, range);
+    try {
+      return await resolver.resolveRequestVersions();
+    } catch (err) {
+      // if it is not an error thrown by yarn and it has a parent request,
+      // thow a more readable error
+      if (!(err instanceof MessageError) && this.parentRequest && this.parentRequest.pattern) {
+        throw new MessageError(
+          this.reporter.lang('requiredPackageNotFoundRegistry', pattern, this.parentRequest.pattern, this.registry),
+        );
+      }
+      throw err;
+    }
+  }
+
   /**
    * If the input pattern matches a registry one then attempt to find it on the registry.
    * Otherwise fork off to an exotic resolver if one matches.

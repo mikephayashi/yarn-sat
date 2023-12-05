@@ -91,3 +91,15 @@ Yarn wouldn't exist if it wasn't for excellent prior art. Yarn has been inspired
 ## Credits
 
 Thanks to [Sam Holmes](https://github.com/samholmes) for donating the npm package name!
+
+## SAT solver
+Try 
+"dependencies": {
+  "chalk": "5.3.0"
+}
+"dependencies": {
+  "@yunxing-test/c": "~0.0.1"
+}
+"dependencies": {
+  "test-yarn-packages": "1.0.0"
+}

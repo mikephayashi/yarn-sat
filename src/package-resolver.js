@@ -3,7 +3,7 @@
 import type {Manifest, DependencyRequestPatterns, DependencyRequestPattern} from './types.js';
 import type {RegistryNames} from './registries/index.js';
 import type PackageReference from './package-reference.js';
-import type {Reporter} from './reporters/index.js';
+import type {ConsoleReporter, Reporter} from './reporters/index.js';
 import {getExoticResolver} from './resolvers/index.js';
 import type Config from './config.js';
 import PackageRequest from './package-request.js';
@@ -14,6 +14,8 @@ import Lockfile, {type LockManifest} from './lockfile';
 import map from './util/map.js';
 import WorkspaceLayout from './workspace-layout.js';
 import ResolutionMap, {shouldUpdateLockfile} from './resolution-map.js';
+import Logic from 'logic-solver'
+import { Dependency } from 'webpack';
 
 const invariant = require('invariant');
 const semver = require('semver');
@@ -544,6 +546,7 @@ export default class PackageResolver {
     this.flat = Boolean(isFlat);
     this.frozen = Boolean(isFrozen);
     this.workspaceLayout = workspaceLayout;
+    this.deps = deps;
     const activity = (this.activity = this.reporter.activity());
 
     for (const req of deps) {
@@ -647,5 +650,165 @@ export default class PackageResolver {
     }
 
     return req;
+  }
+
+  findVersions(initialReq: DependencyRequestPattern): ?any {
+    const req = this.resolveToResolution(initialReq);
+
+    // we've already resolved it with a resolution
+    if (!req) {
+      return null;
+    }
+
+    const request = new PackageRequest(req, this);
+    const fetchKey = `${req.registry}:${req.pattern}:${String(req.optional)}`;
+    const initialFetch = !this.fetchingPatterns.has(fetchKey);
+    let fresh = false;
+
+    if (this.activity) {
+      this.activity.tick(req.pattern);
+    }
+
+    if (initialFetch) {
+      this.fetchingPatterns.add(fetchKey);
+
+      const lockfileEntry = this.lockfile.getLocked(req.pattern);
+
+      if (lockfileEntry) {
+        const {range, hasVersion} = normalizePattern(req.pattern);
+
+        if (this.isLockfileEntryOutdated(lockfileEntry.version, range, hasVersion)) {
+          this.reporter.warn(this.reporter.lang('incorrectLockfileEntry', req.pattern));
+          this.removePattern(req.pattern);
+          this.lockfile.removePattern(req.pattern);
+          fresh = true;
+        }
+      } else {
+        fresh = true;
+      }
+
+      request.init();
+    }
+
+    return request.getAllVersionsOnRegistry({fresh, frozen: this.frozen});
+  }
+
+  getFormattedTerm(name: string, version: string): string {
+    return name + '@' + version;
+  }
+
+  async satSolve(patterns: Array<string>): Promise<any>{
+    let names = this.getAllDependencyNamesByLevelOrder(patterns);
+    const versionsMap = {};
+    // let names = ['a', 'b'];
+    // const versionsMap = {
+    //   a: {
+    //     '0.0.1': {
+    //       version: '0.0.1',
+    //       dependencies: {
+    //         b: '^0.0.2',
+    //       },
+    //     },
+    //   },
+    //   b: {
+    //     '0.0.1': {
+    //       version: '0.0.1',
+    //       dependencies: [],
+    //     },
+    //     '0.0.2': {
+    //       version: '0.0.2',
+    //       dependencies: [],
+    //     },
+    //   },
+    // };
+    const solver = new Logic.Solver();
+    const req = this.deps[0];
+    for (const deps of this.deps) {
+      //FIXME: FILTER * etc.
+      solver.require(deps.pattern);
+    }
+    for (const name of names) {
+      req.pattern = name + '@*';
+      versionsMap[name] = await this.findVersions(req);
+    }
+    names = Array.from(names);
+    while (names.length > 0) {
+      const name = names.pop();
+      const versions = [];
+      for (const version in versionsMap[name]) {
+        const versionObject = versionsMap[name][version];
+        versions.push(this.getFormattedTerm(name, versionObject.version));
+        const dependencies = [];
+        // @yunxing-test/b: '0.0.1'
+        for (const dependencyName in versionObject.dependencies) {
+          if (!(dependencyName in versionsMap)) {
+            req.pattern = dependencyName + '@*';
+            versionsMap[dependencyName] = await this.findVersions(req);
+            names.push(dependencyName);
+          }
+          const curVersion = versionObject.dependencies[dependencyName];
+          if (curVersion[0] == '^') {
+            let versionNum = curVersion.substring(1);
+            if (versionNum.indexOf('.') == -1) {
+              versionNum += '.0.0';
+            }
+            const filteredVersions = [];
+            for (const depVersion in versionsMap[dependencyName]) {
+              // regex
+              const regex = /(\d*)\.(\d*)\.(\d*).*/;
+              const versionNumMatch = regex.exec(versionNum);
+              const versionNumMatch1 = parseInt(versionNumMatch[1], 10);
+              const versionNumMatch2 = parseInt(versionNumMatch[2], 10);
+              const versionNumMatch3 = parseInt(versionNumMatch[3], 10);
+              const depVersionMatch = regex.exec(depVersion);
+              const depVersion1 = parseInt(depVersionMatch[1], 10);
+              const depVersion2 = parseInt(depVersionMatch[2], 10);
+              const depVersion3 = parseInt(depVersionMatch[3], 10);
+              if (
+                depVersion1 >= versionNumMatch1 &&
+                depVersion2 >= versionNumMatch2 &&
+                depVersion3 >= versionNumMatch3
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            }
+            if (filteredVersions.length > 0) {
+              dependencies.push(Logic.or(filteredVersions));
+            }
+            //FIXME: DO SOMETHING.. UNIONS/HYPHENS
+          } else if (curVersion[0] == '~') {
+            continue;
+          } else if (curVersion[0] == '>') {
+            continue;
+          } else if (curVersion[0] == '<') {
+            continue;
+          } else if (curVersion[0] == '=') {
+            continue;
+          } else if (curVersion != '*') {
+            dependencies.push(this.getFormattedTerm(dependencyName, curVersion));
+          }
+        }
+        if (dependencies.length > 0) {
+          solver.require(Logic.implies(this.getFormattedTerm(name, version), Logic.and(dependencies)));
+        }
+      }
+      solver.require(Logic.exactlyOne(versions));
+    }
+    const solution = solver.solve().getTrueVars();
+    for (const entry of solution) {
+      if (!(entry in this.patterns)) {
+        const req = this.deps[0];
+        req.pattern = entry;
+        this.addPattern(entry, this.find(req));
+      }
+    }
+    return solution;
+    // const solutions = [];
+    // let curSol;
+    // while ((curSol = solver.solve())) {
+    //   solutions.push(curSol.getTrueVars());
+    //   solver.forbid(curSol.getFormula()); // forbid the current solution
+    // }
+    // console.log('SOLUTIONS: ' + solutions);
   }
 }
