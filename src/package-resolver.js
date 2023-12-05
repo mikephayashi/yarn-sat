@@ -796,10 +796,16 @@ export default class PackageResolver {
     }
     const solution = solver.solve().getTrueVars();
     for (const entry of solution) {
-      if (!(entry in this.patterns)) {
-        const req = this.deps[0];
-        req.pattern = entry;
-        this.addPattern(entry, this.find(req));
+      const splitEntry = entry.split('@');
+      for (const curPackage in this.patterns) {
+        const splitCurPackage = curPackage.split('@');
+        //FIXME: CHANGE HERE
+        if (splitEntry[1] == splitCurPackage[1] && splitCurPackage[2][0] == '*') {
+          const req = this.deps[0];
+          req.pattern = entry;
+          await this.find(req);
+          this.patterns[curPackage] = this.patterns[entry];
+        }
       }
     }
     return solution;
