@@ -697,6 +697,20 @@ export default class PackageResolver {
     return name + '@' + version;
   }
 
+  extractVersionNumber(curVersion: string): string {
+    let versionNum = curVersion.substring(1);
+    if (versionNum.indexOf('.') == -1) {
+      versionNum += '.0.0';
+    }
+    return versionNum;
+  }
+
+  extractNumbersInVersion(versionNum: string): any {
+    const regex = /(\d*)\.(\d*)\.(\d*).*/;
+    const versionNumMatch = regex.exec(versionNum);
+    return [parseInt(versionNumMatch[1], 10), parseInt(versionNumMatch[2], 10), parseInt(versionNumMatch[3], 10)];
+  }
+
   async satSolve(patterns: Array<string>): Promise<any>{
     let names = this.getAllDependencyNamesByLevelOrder(patterns);
     const versionsMap = {};
@@ -747,45 +761,68 @@ export default class PackageResolver {
             names.push(dependencyName);
           }
           const curVersion = versionObject.dependencies[dependencyName];
-          if (curVersion[0] == '^') {
-            let versionNum = curVersion.substring(1);
-            if (versionNum.indexOf('.') == -1) {
-              versionNum += '.0.0';
-            }
-            const filteredVersions = [];
-            for (const depVersion in versionsMap[dependencyName]) {
-              // regex
-              const regex = /(\d*)\.(\d*)\.(\d*).*/;
-              const versionNumMatch = regex.exec(versionNum);
-              const versionNumMatch1 = parseInt(versionNumMatch[1], 10);
-              const versionNumMatch2 = parseInt(versionNumMatch[2], 10);
-              const versionNumMatch3 = parseInt(versionNumMatch[3], 10);
-              const depVersionMatch = regex.exec(depVersion);
-              const depVersion1 = parseInt(depVersionMatch[1], 10);
-              const depVersion2 = parseInt(depVersionMatch[2], 10);
-              const depVersion3 = parseInt(depVersionMatch[3], 10);
+          const versionNum = this.extractVersionNumber(curVersion);
+          const versionNumEx = this.extractNumbersInVersion(versionNum);
+          const filteredVersions = [];
+          for (const depVersion in versionsMap[dependencyName]) {
+            const depVersionEx = this.extractNumbersInVersion(depVersion);
+            if (curVersion[0] == '^') {
               if (
-                depVersion1 >= versionNumMatch1 &&
-                depVersion2 >= versionNumMatch2 &&
-                depVersion3 >= versionNumMatch3
+                depVersionEx[0] == versionNumEx[0] &&
+                depVersionEx[1] >= versionNumEx[1] &&
+                depVersionEx[2] >= versionNumEx[2]
               ) {
                 filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
               }
+            } else if (curVersion[0] == '=') {
+              dependencies.push(this.getFormattedTerm(dependencyName, versionNum));
+            // FIXME: NOT EXACTLY CORRECT
+            } else if (curVersion[0] == '~') {
+              if (
+                depVersionEx[0] == versionNumEx[0] &&
+                depVersionEx[1] == versionNumEx[1] &&
+                depVersionEx[2] >= versionNumEx[2]
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            } else if (curVersion[0] == '>' && curVersion[0] == '=') {
+              if (
+                depVersionEx[0] >= versionNumEx[0] &&
+                depVersionEx[1] >= versionNumEx[1] &&
+                depVersionEx[2] >= versionNumEx[2]
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            } else if (curVersion[0] == '<' && curVersion[0] == '=') {
+              if (
+                depVersionEx[0] <= versionNumEx[0] &&
+                depVersionEx[1] <= versionNumEx[1] &&
+                depVersionEx[2] <= versionNumEx[2]
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            } else if (curVersion[0] == '>') {
+              if (
+                depVersionEx[0] > versionNumEx[0] ||
+                ((depVersionEx[0] == versionNumEx[0] && depVersionEx[1] > versionNumEx[1]) ||
+                  (depVersionEx[1] == versionNumEx[1] && depVersionEx[2] > versionNumEx[2]))
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            } else if (curVersion[0] == '<') {
+              if (
+                depVersionEx[0] < versionNumEx[0] ||
+                ((depVersionEx[0] == versionNumEx[0] && depVersionEx[1] < versionNumEx[1]) ||
+                  (depVersionEx[1] == versionNumEx[1] && depVersionEx[2] < versionNumEx[2]))
+              ) {
+                filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
+              }
+            } else if (curVersion != '*') {
+              dependencies.push(this.getFormattedTerm(dependencyName, curVersion));
             }
-            if (filteredVersions.length > 0) {
-              dependencies.push(Logic.or(filteredVersions));
-            }
-            //FIXME: DO SOMETHING.. UNIONS/HYPHENS
-          } else if (curVersion[0] == '~') {
-            continue;
-          } else if (curVersion[0] == '>') {
-            continue;
-          } else if (curVersion[0] == '<') {
-            continue;
-          } else if (curVersion[0] == '=') {
-            continue;
-          } else if (curVersion != '*') {
-            dependencies.push(this.getFormattedTerm(dependencyName, curVersion));
+          }
+          if (filteredVersions.length > 0) {
+            dependencies.push(Logic.or(filteredVersions));
           }
         }
         if (dependencies.length > 0) {
@@ -799,11 +836,16 @@ export default class PackageResolver {
       const splitEntry = entry.split('@');
       for (const curPackage in this.patterns) {
         const splitCurPackage = curPackage.split('@');
-        //FIXME: CHANGE HERE
-        if (splitEntry[1] == splitCurPackage[1] && splitCurPackage[2][0] == '*') {
+        //FIXME: Replace with 1s and 2 if @ in front
+        if (splitEntry[0] == splitCurPackage[0] && splitCurPackage[1][0] == '^') {
           const req = this.deps[0];
           req.pattern = entry;
           await this.find(req);
+          const oldEntry = this.patterns[entry];
+          if (oldEntry == undefined) {
+            this.patterns[entry] = this.patterns[splitEntry[0] + '@=' + splitEntry[1]];
+            this.patterns[curPackage] = this.patterns[entry];
+          }
           this.patterns[curPackage] = this.patterns[entry];
         }
       }
