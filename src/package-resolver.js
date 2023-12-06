@@ -785,7 +785,7 @@ export default class PackageResolver {
               ) {
                 filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
               }
-            } else if (curVersion[0] == '>' && curVersion[0] == '=') {
+            } else if (curVersion[0] == '>' && curVersion[1] == '=') {
               if (
                 depVersionEx[0] >= versionNumEx[0] &&
                 depVersionEx[1] >= versionNumEx[1] &&
@@ -793,7 +793,7 @@ export default class PackageResolver {
               ) {
                 filteredVersions.push(this.getFormattedTerm(dependencyName, depVersion));
               }
-            } else if (curVersion[0] == '<' && curVersion[0] == '=') {
+            } else if (curVersion[0] == '<' && curVersion[1] == '=') {
               if (
                 depVersionEx[0] <= versionNumEx[0] &&
                 depVersionEx[1] <= versionNumEx[1] &&
@@ -836,8 +836,18 @@ export default class PackageResolver {
       const splitEntry = entry.split('@');
       for (const curPackage in this.patterns) {
         const splitCurPackage = curPackage.split('@');
-        //FIXME: Replace with 1s and 2 if @ in front
-        if (splitEntry[0] == splitCurPackage[0] && splitCurPackage[1][0] == '^') {
+        let firstIndex = 0;
+        let secondIndex = 1;
+        if (curPackage[0] == '@') {
+          firstIndex = 1;
+          secondIndex = 2;
+        }
+        if (
+          splitEntry[firstIndex] == splitCurPackage[firstIndex] &&
+          (splitCurPackage[secondIndex][0] == '>' ||
+            splitCurPackage[secondIndex][0] == '*' ||
+            splitCurPackage[secondIndex][0] == '^')
+        ) {
           const req = this.deps[0];
           req.pattern = entry;
           await this.find(req);
